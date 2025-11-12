@@ -50,6 +50,12 @@ jobs:
         run: |
           mkdir -p "${{ github.event.inputs.out_dir || 'webshots' }}"
 
+      - name: Show input file (debug)
+        run: |
+          echo "INPUT=${{ github.event.inputs.input_file || 'urls.csv' }}"
+          file "${{ github.event.inputs.input_file || 'urls.csv' }}" || true
+          sed -n '1,50p' "${{ github.event.inputs.input_file || 'urls.csv' }}" || true
+
       - name: Run extractor
         env:
           INPUT_FILE: ${{ github.event.inputs.input_file }}
