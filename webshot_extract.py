@@ -13,37 +13,44 @@ DEFAULT_RULES = {
     }
 }
 
+BLOCK_PATTERNS = [
+    "googletagmanager.com", "doubleclick.net", "google-analytics.com",
+    "facebook.net", "ads.", "/ads?", "/adserver", "scorecardresearch.com"
+]
+
 def parse_urls(path: str):
     urls = []
     if not os.path.exists(path):
+        print(f"[ERROR] Input file not found: {path}", file=sys.stderr)
         return urls
     if path.endswith(".csv"):
         with open(path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if row.get("url"):
+                if row.get('url'):
                     urls.append(row)
     else:
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 u = line.strip()
-                if u and not u.startswith("#"):
-                    urls.append({"url": u})
+                if u and not u.startswith('#'):
+                    urls.append({'url': u})
     return urls
 
 def sanitize(s: str) -> str:
     return re.sub(r"[^\w\.-]+", "_", s).strip("_")[:180]
 
-def try_select(page, selectors):
+def try_select(page, selectors, wait_ms=8000):
     for sel in selectors:
+        if not sel: 
+            continue
         try:
-            loc = page.locator(sel)
-            if loc.count():
-                txt = loc.first.inner_text().strip()
-                if txt:
-                    return txt
+            page.wait_for_selector(sel, state="visible", timeout=wait_ms)
+            txt = page.locator(sel).first.inner_text().strip()
+            if txt:
+                return txt
         except Exception:
-            pass
+            continue
     return ""
 
 def try_text_fragment(url: str):
@@ -61,12 +68,12 @@ def try_text_fragment(url: str):
     return out
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Screenshots + quotes (robust)")
     ap.add_argument("--input", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--viewport", default="1366x768")
-    ap.add_argument("--delay", type=int, default=2000)
-    ap.add_argument("--timeout", type=int, default=50000)
+    ap.add_argument("--delay", type=int, default=1200)
+    ap.add_argument("--timeout", type=int, default=120000)
     args = ap.parse_args()
 
     width, height = (int(x) for x in args.viewport.lower().split("x"))
@@ -75,20 +82,29 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     urls = parse_urls(args.input)
-
-    # Log summary
     with open(os.path.join(out_dir, "run_summary.txt"), "w", encoding="utf-8") as f:
         f.write(f"INPUT: {args.input}\nTOTAL_URLS: {len(urls)}\n")
 
     if not urls:
         with open(os.path.join(out_dir, "NO_DATA.txt"), "w", encoding="utf-8") as f:
-            f.write("No URLs in input file\n")
+            f.write("No URLs found\n")
         return
 
     records = []
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
-        context = browser.new_context(viewport={"width": width, "height": height}, user_agent="Mozilla/5.0 (WebshotBot/1.0)")
+        browser = pw.chromium.launch(headless=True, args=["--no-sandbox","--disable-dev-shm-usage"])
+        context = browser.new_context(
+            viewport={"width": width, "height": height},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        )
+
+        def route_handler(route):
+            url = route.request.url
+            if any(pat in url for pat in BLOCK_PATTERNS):
+                return route.abort()
+            return route.continue_()
+        context.route("**/*", route_handler)
+
         page = context.new_page()
 
         for row in tqdm(urls, desc="Process URLs"):
@@ -103,24 +119,21 @@ def main():
                     ef.write(str(e))
                 continue
 
-            # best-effort cookie close
-            for sel in ["button:has-text('Accept')","button:has-text('Accetta')","[id*='onetrust-accept']"]:
+            for sel in ["button:has-text('Accept')","button:has-text('Accetta')","[id*='onetrust-accept']","[aria-label*='accept']"]:
                 try:
-                    loc = page.locator(sel)
-                    if loc.count():
-                        loc.first.click(timeout=800)
-                        break
+                    page.locator(sel).first.click(timeout=700)
+                    break
                 except Exception:
                     pass
 
-            page.wait_for_load_state("networkidle", timeout=args.timeout)
-            if args.delay: page.wait_for_timeout(args.delay)
+            if args.delay:
+                page.wait_for_timeout(args.delay)
 
             rules = DEFAULT_RULES.get(domain, {})
-            name = try_select(page, [row.get("name_sel","")]) or try_select(page, rules.get("name", []))
-            price = try_select(page, [row.get("price_sel","")]) or try_select(page, rules.get("price", []))
-            change = try_select(page, [row.get("change_sel","")]) or try_select(page, rules.get("change", []))
-            dt_str = try_select(page, [row.get("datetime_sel","")]) or try_select(page, rules.get("datetime", []))
+            name = try_select(page, [row.get("name_sel","")] + rules.get("name", []))
+            price = try_select(page, [row.get("price_sel","")] + rules.get("price", []))
+            change = try_select(page, [row.get("change_sel","")] + rules.get("change", []))
+            dt_str = try_select(page, [row.get("datetime_sel","")] + rules.get("datetime", []), wait_ms=4000)
 
             if not price or not change:
                 frag = try_text_fragment(url)
@@ -128,18 +141,19 @@ def main():
                 change = change or frag.get("change","")
 
             shot_name = sanitize(f"{domain}_{parsed.path}") + ".png"
-            page.screenshot(path=os.path.join(out_dir, shot_name), full_page=True)
+            try:
+                page.screenshot(path=os.path.join(out_dir, shot_name), full_page=True)
+            except Exception as e:
+                with open(os.path.join(out_dir, f"ERROR_SHOT_{sanitize(url)}.txt"), "w", encoding="utf-8") as ef:
+                    ef.write(str(e))
 
             records.append({"source": domain, "url": url, "name": name, "price": price, "change_pct": change, "datetime_str": dt_str})
 
         browser.close()
 
-    import json
-    import pandas as pd
     df = pd.DataFrame.from_records(records)
     df.to_csv(os.path.join(out_dir, "quotes.csv"), index=False)
     with open(os.path.join(out_dir, "quotes.json"), "w", encoding="utf-8") as jf:
         json.dump(records, jf, ensure_ascii=False, indent=2)
 
-if __name__ == "__main__":
-    main()
+    print(f"[OK] Outputs -> {out_dir}")
