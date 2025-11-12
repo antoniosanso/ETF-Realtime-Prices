@@ -1,4 +1,4 @@
-name: Webshot & Quote Extractor (v3.1)
+name: Webshot & Quote Extractor (v3.2)
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ on:
       delay_ms:
         description: "Extra delay before shot (ms)"
         required: false
-        default: "2000"
+        default: "1200"
       commit_outputs:
         description: "Commit outputs to repo (yes/no)"
         required: false
@@ -58,7 +58,7 @@ jobs:
           DELAY_MS: ${{ github.event.inputs.delay_ms }}
         run: |
           set -euxo pipefail
-          python webshot_extract.py             --input "${INPUT_FILE:-urls.csv}"             --out   "${OUT_DIR:-webshots}"             --viewport "${VIEWPORT:-1366x768}"             --delay "${DELAY_MS:-2000}"
+          python webshot_extract.py             --input "${INPUT_FILE:-urls.csv}"             --out   "${OUT_DIR:-webshots}"             --viewport "${VIEWPORT:-1366x768}"             --delay "${DELAY_MS:-1200}"
           echo "Extractor finished"
 
       - name: List outputs (debug)
@@ -74,7 +74,7 @@ jobs:
           git config user.name "GitHub Actions"
           git add ${{ github.event.inputs.out_dir || 'webshots' }} || true
           if ! git diff --cached --quiet; then
-            git commit -m "webshot v3.1 outputs: ${GITHUB_RUN_ID}" || true
+            git commit -m "webshot v3.2 outputs: ${GITHUB_RUN_ID}" || true
             git pull --rebase || true
             git push || true
           else
@@ -83,6 +83,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: webshot-v3_1-${{ github.run_id }}
+          name: webshot-v3_2-${{ github.run_id }}
           path: ${{ github.event.inputs.out_dir || 'webshots' }}
           if-no-files-found: warn
