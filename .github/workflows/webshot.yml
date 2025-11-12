@@ -1,48 +1,73 @@
-name: Webshot URLs
+
+name: Webshot & Quote Extractor (v3)
+
 on:
   workflow_dispatch:
     inputs:
       input_file:
-        description: "Path to the text file with one URL per line"
+        description: "Path to the URL list file (urls.csv or urls.txt)"
         required: false
-        default: "urls.txt"
+        default: "urls.csv"
       out_dir:
-        description: "Output directory for screenshots"
+        description: "Output base directory in repo"
         required: false
-        default: "screenshots"
+        default: "webshots"
       viewport:
-        description: "Viewport WxH (e.g., 1366x768)"
+        description: "Viewport WxH"
         required: false
         default: "1366x768"
       delay_ms:
-        description: "Extra delay after network idle (ms) before shot"
+        description: "Extra delay before shot (ms)"
         required: false
         default: "1500"
-  schedule:
-    - cron: "0 6 * * 1-5"
+      commit_outputs:
+        description: "Commit outputs to repo (yes/no)"
+        required: false
+        default: "yes"
+
+permissions:
+  contents: write
+
 jobs:
-  webshot:
+  run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install deps
+
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install --with-deps chromium
-      - name: Run screenshots
+
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Run extractor
         env:
           INPUT_FILE: ${{ github.event.inputs.input_file }}
           OUT_DIR: ${{ github.event.inputs.out_dir }}
           VIEWPORT: ${{ github.event.inputs.viewport }}
           DELAY_MS: ${{ github.event.inputs.delay_ms }}
         run: |
-          python webshot.py --input "${INPUT_FILE:-urls.txt}" --out "${OUT_DIR:-screenshots}" --viewport "${VIEWPORT:-1366x768}" --delay "${DELAY_MS:-1500}"
+          python webshot_extract.py             --input "${INPUT_FILE:-urls.csv}"             --out   "${OUT_DIR:-webshots}"             --viewport "${VIEWPORT:-1366x768}"             --delay "${DELAY_MS:-1500}"
+
+      - name: Commit outputs (optional)
+        if: ${{ github.event.inputs.commit_outputs == 'yes' }}
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add ${{ github.event.inputs.out_dir || 'webshots' }}
+          git diff --cached --quiet || git commit -m "webshot v3 outputs: ${GITHUB_RUN_ID}" || true
+          git pull --rebase || true
+          git push || true
+
       - uses: actions/upload-artifact@v4
         with:
-          name: webshots-${{ github.run_id }}
-          path: ${{ github.event.inputs.out_dir || 'screenshots' }}
+          name: webshot-v3-${{ github.run_id }}
+          path: ${{ github.event.inputs.out_dir || 'webshots' }}
           if-no-files-found: warn
