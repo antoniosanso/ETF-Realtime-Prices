@@ -1,10 +1,10 @@
-import argparse, os, re, csv, json, urllib.parse, datetime, sys
+import argparse, os, re, csv, json, urllib.parse, datetime, sys, shutil
 import pandas as pd
 from tqdm import tqdm
 from playwright.sync_api import sync_playwright
-from zoneinfo import ZoneInfo  # per orario locale corretto (CET/CEST)
+from zoneinfo import ZoneInfo  # fuso locale corretto (CET/CEST)
 
-# Selettori ampliati per Investing (IT)
+# Selettori per Investing (IT) – estesi
 DEFAULT_RULES = {
     "it.investing.com": {
         "name": [
@@ -17,7 +17,6 @@ DEFAULT_RULES = {
             "div.instrument-price_instrument-price__3uw25 span",
             "span.text-2xl",
         ],
-        # assoluta e percentuale hanno spesso data-test diversi
         "change_abs": [
             "[data-test='instrument-price-change']",
             "span.instrument-price_change__19cas",
@@ -128,7 +127,7 @@ def page_scan_pct(page) -> str:
 # ---------- main ----------
 
 def main():
-    ap = argparse.ArgumentParser(description="Screenshots + quote extraction + update urls.csv")
+    ap = argparse.ArgumentParser(description="Screenshots + quote extraction + update urls.csv + cleanup")
     ap.add_argument("--input", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--viewport", default="1366x768")
@@ -161,7 +160,7 @@ def main():
         tz = ZoneInfo("Europe/Rome")
 
     records = []            # per quotes.csv (storico del run)
-    latest_rows = []        # per urls.csv (valori più recenti)
+    latest_rows = []        # per urls.csv (ultimi valori)
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True, args=["--no-sandbox","--disable-dev-shm-usage"])
@@ -193,7 +192,7 @@ def main():
             try:
                 page.goto(url, timeout=args.timeout, wait_until="domcontentloaded")
             except Exception as e:
-                # anche se fallisce, appendiamo riga vuota (per mantenere n° righe)
+                # append riga "vuota" per mantenere l'ordine/numero righe
                 latest_rows.append({
                     "url": url, "name": "", "price": "",
                     "change_abs": "", "change_pct": "",
@@ -267,17 +266,44 @@ def main():
         browser.close()
 
     # --- Salvataggi ---
-    # 1) quotes.csv del run (con screenshot e log nella cartella timestamp)
+    # 1) quotes.csv del run
     df_quotes = pd.DataFrame.from_records(records)
     df_quotes.to_csv(os.path.join(out_dir, "quotes.csv"), index=False)
     with open(os.path.join(out_dir, "quotes.json"), "w", encoding="utf-8") as jf:
         json.dump(records, jf, ensure_ascii=False, indent=2)
 
-    # 2) urls.csv sovrascritto con gli ULTIMI valori (ordine come l'input)
+    # 2) urls.csv – sovrascrivi con gli ultimi valori
     df_latest = pd.DataFrame(latest_rows, columns=[
         "url", "name", "price", "change_abs", "change_pct", "captured_at_local"
     ])
     df_latest.to_csv(input_path, index=False)
+
+    # --- Verifica scrittura urls.csv ---
+    ok = False
+    try:
+        df_check = pd.read_csv(input_path)
+        # Condizioni minime: colonne attese presenti e almeno una riga
+        expected_cols = set(["url", "name", "price", "change_abs", "change_pct", "captured_at_local"])
+        ok = expected_cols.issubset(df_check.columns) and len(df_check) >= 1
+    except Exception as e:
+        print(f"[ERROR] Verification read failed: {e}", file=sys.stderr)
+        ok = False
+
+    # 3) Pulizia: elimina tutte le sottocartelle di 'webshots' tranne quella corrente
+    if ok:
+        base_out = os.path.abspath(args.out)
+        keep_dir = os.path.abspath(out_dir)
+        try:
+            for name in os.listdir(base_out):
+                path = os.path.join(base_out, name)
+                # elimina solo directory diverse da quella corrente
+                if os.path.isdir(path) and os.path.abspath(path) != keep_dir:
+                    shutil.rmtree(path, ignore_errors=True)
+            print(f"[CLEANUP] Done. Kept: {keep_dir}")
+        except Exception as e:
+            print(f"[WARN] Cleanup skipped/partial: {e}", file=sys.stderr)
+    else:
+        print("[WARN] Cleanup skipped because urls.csv verification failed.", file=sys.stderr)
 
     print(f"[OK] Outputs -> {out_dir}  |  urls.csv updated: {input_path}")
 
