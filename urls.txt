@@ -1,0 +1,3 @@
+# One URL per line
+https://it.investing.com/etfs/lyxor-msci-world-info-tech-tr?cid=47228
+https://it.investing.com/etfs/xtrackers-ai-and-big-data-ucits?cid=1178262
