@@ -1,2 +1,0 @@
-INPUT: urls.csv
-TOTAL_URLS: 2
