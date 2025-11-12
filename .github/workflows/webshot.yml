@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       input_file:
-        description: "Path to the URL list file (urls.csv or urls.txt)"
+        description: "Percorso del file URL (es. urls.csv o Realtime-prices/urls.csv)"
         required: false
         default: "urls.csv"
       out_dir:
-        description: "Output base directory in repo"
+        description: "Cartella di output nel repo"
         required: false
         default: "webshots"
       viewport:
@@ -16,11 +16,11 @@ on:
         required: false
         default: "1366x768"
       delay_ms:
-        description: "Extra delay before shot (ms)"
+        description: "Ritardo extra prima dello scatto (ms)"
         required: false
         default: "1200"
       commit_outputs:
-        description: "Commit outputs to repo (yes/no)"
+        description: "Committa gli output nel repo (yes/no)"
         required: false
         default: "yes"
 
@@ -50,21 +50,41 @@ jobs:
         run: |
           mkdir -p "${{ github.event.inputs.out_dir || 'webshots' }}"
 
-      - name: Show input file (debug)
+      # 👇 Risolve automaticamente il path corretto di urls.csv (root o sottocartelle)
+      - name: Resolve input path
+        id: resolve
+        shell: bash
         run: |
-          echo "INPUT=${{ github.event.inputs.input_file || 'urls.csv' }}"
-          file "${{ github.event.inputs.input_file || 'urls.csv' }}" || true
-          sed -n '1,50p' "${{ github.event.inputs.input_file || 'urls.csv' }}" || true
+          set -e
+          IN="${{ github.event.inputs.input_file || 'urls.csv' }}"
+          if [ -f "$IN" ]; then
+            echo "found=$IN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CAND=$(git ls-files | grep -i '/urls\.csv$' | head -n1 || true)
+          if [ -z "$CAND" ]; then
+            echo "❌ urls.csv non trovato. Imposta l'input_file con il percorso corretto (es. Realtime-prices/urls.csv)." >&2
+            exit 1
+          fi
+          echo "found=$CAND" >> "$GITHUB_OUTPUT"
 
+      # 👇 Mostra le prime righe del file trovato (debug rapido)
+      - name: Show input file (debug)
+        shell: bash
+        run: |
+          echo "USING: ${{ steps.resolve.outputs.found }}"
+          sed -n '1,50p' "${{ steps.resolve.outputs.found }}" || true
+
+      # 👇 Esegue l’estrazione (screenshot + tabella quote)
       - name: Run extractor
-        env:
-          INPUT_FILE: ${{ github.event.inputs.input_file }}
-          OUT_DIR: ${{ github.event.inputs.out_dir }}
-          VIEWPORT: ${{ github.event.inputs.viewport }}
-          DELAY_MS: ${{ github.event.inputs.delay_ms }}
+        shell: bash
         run: |
           set -euxo pipefail
-          python webshot_extract.py             --input "${INPUT_FILE:-urls.csv}"             --out   "${OUT_DIR:-webshots}"             --viewport "${VIEWPORT:-1366x768}"             --delay "${DELAY_MS:-1200}"
+          python webshot_extract.py \
+            --input "${{ steps.resolve.outputs.found }}" \
+            --out   "${{ github.event.inputs.out_dir || 'webshots' }}" \
+            --viewport "${{ github.event.inputs.viewport || '1366x768' }}" \
+            --delay "${{ github.event.inputs.delay_ms || '1200' }}"
           echo "Extractor finished"
 
       - name: List outputs (debug)
@@ -80,7 +100,7 @@ jobs:
           git config user.name "GitHub Actions"
           git add ${{ github.event.inputs.out_dir || 'webshots' }} || true
           if ! git diff --cached --quiet; then
-            git commit -m "webshot v3.2 outputs: ${GITHUB_RUN_ID}" || true
+            git commit -m "webshot outputs: ${GITHUB_RUN_ID}" || true
             git pull --rebase || true
             git push || true
           else
@@ -89,6 +109,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: webshot-v3_2-${{ github.run_id }}
+          name: webshot-${{ github.run_id }}
           path: ${{ github.event.inputs.out_dir || 'webshots' }}
           if-no-files-found: warn
