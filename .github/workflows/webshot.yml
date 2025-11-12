@@ -1,5 +1,4 @@
-
-name: Webshot & Quote Extractor (v3)
+name: Webshot & Quote Extractor (v3.1)
 
 on:
   workflow_dispatch:
@@ -19,7 +18,7 @@ on:
       delay_ms:
         description: "Extra delay before shot (ms)"
         required: false
-        default: "1500"
+        default: "2000"
       commit_outputs:
         description: "Commit outputs to repo (yes/no)"
         required: false
@@ -47,6 +46,10 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
+      - name: Ensure output base dir exists
+        run: |
+          mkdir -p "${{ github.event.inputs.out_dir || 'webshots' }}"
+
       - name: Run extractor
         env:
           INPUT_FILE: ${{ github.event.inputs.input_file }}
@@ -54,20 +57,32 @@ jobs:
           VIEWPORT: ${{ github.event.inputs.viewport }}
           DELAY_MS: ${{ github.event.inputs.delay_ms }}
         run: |
-          python webshot_extract.py             --input "${INPUT_FILE:-urls.csv}"             --out   "${OUT_DIR:-webshots}"             --viewport "${VIEWPORT:-1366x768}"             --delay "${DELAY_MS:-1500}"
+          set -euxo pipefail
+          python webshot_extract.py             --input "${INPUT_FILE:-urls.csv}"             --out   "${OUT_DIR:-webshots}"             --viewport "${VIEWPORT:-1366x768}"             --delay "${DELAY_MS:-2000}"
+          echo "Extractor finished"
+
+      - name: List outputs (debug)
+        run: |
+          echo "=== TREE ==="
+          ls -R "${{ github.event.inputs.out_dir || 'webshots' }}" || true
+          echo "==========="
 
       - name: Commit outputs (optional)
         if: ${{ github.event.inputs.commit_outputs == 'yes' }}
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git add ${{ github.event.inputs.out_dir || 'webshots' }}
-          git diff --cached --quiet || git commit -m "webshot v3 outputs: ${GITHUB_RUN_ID}" || true
-          git pull --rebase || true
-          git push || true
+          git add ${{ github.event.inputs.out_dir || 'webshots' }} || true
+          if ! git diff --cached --quiet; then
+            git commit -m "webshot v3.1 outputs: ${GITHUB_RUN_ID}" || true
+            git pull --rebase || true
+            git push || true
+          else
+            echo "No changes to commit"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: webshot-v3-${{ github.run_id }}
+          name: webshot-v3_1-${{ github.run_id }}
           path: ${{ github.event.inputs.out_dir || 'webshots' }}
           if-no-files-found: warn
